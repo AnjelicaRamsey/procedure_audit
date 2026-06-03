@@ -1,0 +1,238 @@
+---
+title: "Provider Procedure Audit"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+```
+
+```{r load-data}
+df <- read_csv("~/Documents/Procedure_Audit/procedures.csv")
+```
+
+---
+
+# Data Overview
+
+```{r overview}
+tibble(
+  Metric = c("Total Records", "Unique Providers", "Unique CSNs", "Date Range"),
+  Value = c(
+    nrow(df),
+    n_distinct(df$resident_name),
+    n_distinct(df$csn),
+    paste(min(df$service_date, na.rm = TRUE), "to", max(df$service_date, na.rm = TRUE))
+  )
+) |>
+  kable(col.names = c("", "")) |>
+  kable_styling(full_width = FALSE)
+```
+
+---
+
+# Provider Activity
+
+## Procedures per Provider
+
+```{r resident-summary}
+df |>
+  group_by(resident_name, `Last Name`, `First Name`, PGY, `Program/Type`, `UC/ED Rotation`) |>
+  summarise(
+    Procedures    = n(),
+    Unique_Proc_Types = n_distinct(procedure_type),
+    .groups = "drop"
+  ) |>
+  arrange(desc(Procedures)) |>
+  select(
+    Provider      = resident_name,
+    PGY,
+    Program       = `Program/Type`,
+    Rotation      = `UC/ED Rotation`,
+    Procedures,
+    `Unique Types` = Unique_Proc_Types
+  ) |>
+  kable() |>
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+```
+
+## Procedures by PGY Level
+
+```{r by-pgy}
+df |>
+  count(PGY, procedure_type) |>
+  pivot_wider(names_from = procedure_type, values_from = n, values_fill = 0) |>
+  arrange(PGY) |>
+  kable(caption = "Procedure Counts by PGY Level") |>
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover")) |>
+  scroll_box(width = "100%")
+```
+
+## Procedures by Rotation (ED vs. UC)
+
+```{r by-rotation}
+df |>
+  count(`UC/ED Rotation`, procedure_type) |>
+  pivot_wider(names_from = procedure_type, values_from = n, values_fill = 0) |>
+  kable(caption = "Procedure Counts by Rotation Type") |>
+  kable_styling(full_width = TRUE, bootstrap_options = c("striped", "hover")) |>
+  scroll_box(width = "100%")
+```
+
+---
+
+# Procedure Breakdown
+
+## Procedures per Visit
+
+```{r procs-per-csn}
+csn_summary <- df |>
+  count(csn, name = "n_procedures") |>
+  count(n_procedures, name = "n_visits") |>
+  mutate(
+    `% of All Visits` = scales::percent(n_visits / sum(n_visits), accuracy = 0.1)
+  )
+
+multi_pct <- df |>
+  count(csn) |>
+  summarise(pct = scales::percent(mean(n >= 2), accuracy = 0.1)) |>
+  pull(pct)
+
+csn_summary |>
+  kable(col.names = c("Procedures per Visit", "# of Visits", "% of All Visits")) |>
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
+```
+
+`r multi_pct` of visits included 2 or more procedures.
+
+## Overall Frequency
+
+```{r proc-frequency, fig.width=7, fig.height=4}
+df |>
+  count(procedure_type, sort = TRUE) |>
+  ggplot(aes(x = n, y = fct_reorder(procedure_type, n))) +
+  geom_col(fill = "#2E86AB") +
+  labs(
+    title = "Procedure Volume by Type",
+    x     = "Count",
+    y     = NULL
+  ) +
+  theme_minimal()
+```
+
+## Procedure Mix by PGY Level
+
+```{r proc-by-pgy, fig.width=8, fig.height=5}
+df |>
+  count(PGY, procedure_type) |>
+  ggplot(aes(x = n, y = fct_reorder(procedure_type, n), fill = PGY)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c(
+    "PGY1" = "#A8D5E2",
+    "PGY2" = "#2E86AB",
+    "PGY3" = "#1B5E7B",
+    "PGY4" = "#0D3349"
+  )) +
+  labs(
+    title = "Procedure Type by PGY Level",
+    x     = "Count",
+    y     = NULL,
+    fill  = "PGY"
+  ) +
+  theme_minimal()
+```
+
+---
+
+# Patient & Case Context
+
+## Age Distribution
+
+```{r age-dist, fig.width=6, fig.height=4}
+df |>
+  ggplot(aes(x = age_years)) +
+  geom_histogram(binwidth = 1, fill = "#2E86AB", color = "white") +
+  labs(
+    title = "Age Distribution of Patients",
+    x     = "Age (Years)",
+    y     = "Count"
+  ) +
+  theme_minimal()
+```
+
+## Chief Complaint
+
+```{r chief-complaint}
+df |>
+  count(chief_complaint, sort = TRUE) |>
+  mutate(Percent = scales::percent(n / sum(n), accuracy = 0.1)) |>
+  kable(col.names = c("Chief Complaint", "Count", "% of Total")) |>
+  kable_styling(full_width = FALSE)
+```
+
+## ICD-10 Major Group
+
+```{r icd-group}
+df |>
+  count(icd10_major_group, sort = TRUE) |>
+  mutate(Percent = scales::percent(n / sum(n), accuracy = 0.1)) |>
+  kable(col.names = c("ICD-10 Group", "Count", "% of Total")) |>
+  kable_styling(full_width = FALSE)
+```
+
+## Acuity (ESI)
+
+```{r acuity, fig.width=5, fig.height=4}
+df |>
+  count(acuity_esi) |>
+  mutate(acuity_esi = factor(acuity_esi)) |>
+  ggplot(aes(x = acuity_esi, y = n)) +
+  geom_col(fill = "#2E86AB") +
+  labs(
+    title = "ESI Acuity Distribution",
+    x     = "ESI Level",
+    y     = "Count"
+  ) +
+  theme_minimal()
+```
+
+## Disposition
+
+```{r disposition}
+df |>
+  count(ed_general_disposition, sort = TRUE) |>
+  mutate(Percent = scales::percent(n / sum(n), accuracy = 0.1)) |>
+  kable(col.names = c("Disposition", "Count", "% of Total")) |>
+  kable_styling(full_width = FALSE)
+```
+
+---
+
+# Trends Over Time
+
+```{r time-trends, fig.width=8, fig.height=4}
+df |>
+  mutate(month = floor_date(service_date, "month")) |>
+  count(month) |>
+  ggplot(aes(x = month, y = n)) +
+  geom_line(color = "#2E86AB", linewidth = 1) +
+  geom_point(color = "#2E86AB", size = 2) +
+  labs(
+    title = "Procedures Over Time",
+    x     = NULL,
+    y     = "Count"
+  ) +
+  theme_minimal()
+```
